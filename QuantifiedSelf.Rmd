@@ -1,0 +1,196 @@
+---
+title: "QuantifiedSelf"
+author: "Jay Urbain"
+date: "September 26, 2015"
+output: html_document
+---
+### Introduction
+
+> Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+> In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise. [Reference](http://groupware.les.inf.puc-rio.br/har#ixzz3msAKESdA) 
+
+A Random Forest classification model using 30 trees is developed to predict the following classes with $99.17$% accuracy:
+
+- A: unilateral Dumbbell Biceps Curl
+- B: classthrowing the elbows to the front 
+- C: lifting the dumbbell only halfway 
+- D: lowering the dumbbell only halfway
+- E: throwing the hips to the front
+
+Refer to the appendices for a ranked list of the Random Forest Model variable importance, and a dendogram plot of the decision paramters used for a basic decision tree, and an evaluation of the number of decision trees to use when building our Random Forest Model. The number of decision trees used for the final prediction model was $200$, and was empirically determined.
+
+*Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence, 2012.*  
+
+### Load libraries and data
+
+```{r, echo=FALSE}
+# download the data, if necessary
+trainingURL <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testingURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+trainingFile <- "./data/pml-training.csv"
+testingFile  <- "./data/pml-testing.csv"
+if (!file.exists(trainingFile)) {
+  download.file(trainingURL, destfile=trainingFile, method="curl")
+}
+if (!file.exists(testingFile)) {
+  download.file(testingURL, destfile=testingFile, method="curl")
+}
+```
+```{r, message=FALSE}
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+```
+```{r, echo=TRUE}
+training <- read.csv("./data/pml-training.csv", na.strings=c("NA",""))
+testing <- read.csv("./data/pml-testing.csv", na.strings=c("NA",""))
+dim(training)
+dim(testing)
+```
+Unprocessed data:
+
+- Training data: n=19622, p=160 variables. 
+- Testing data: n=20, p=160 variables. 
+- *classe* variable is the respoonse we are trying to predict.
+
+### Data preprocessing 
+
+- Remove column attributes that will not be helpful for prediction: index, timestamp, and name 
+- Remove column attributes with missing values: NA's
+- Verify dimensions of resulting cleansed data and validation test sets
+
+```{r}
+# Exclude index, timestamp, and name column's
+names(training)[1:7]
+trainingP1<-training[, 8:160]
+testingP1<-testing[, 8:160]
+
+# Exclude columns with NA's from training and test sets
+trainingP2<-trainingP1[, apply(is.na(trainingP1),2,sum) == 0]
+classe<-trainingP2$classe
+trainingP2 <- trainingP2[, sapply(trainingP2, is.numeric)]
+trainingP2$classe<-classe
+dim(trainingP2)
+
+testingP2<-testingP1[, apply(is.na(testingP1),2,sum) == 0]
+classe<-testingP2$classe
+testingP2 <- testingP2[, sapply(testingP2, is.numeric)]
+testingP2$classe<-classe
+dim(testingP2)
+```
+Processed data:
+
+- Training data: n=19622, p=53 variables. 
+- Testing data: n=20, p=53 variables. 
+
+### Partition training data into train and test sets
+```{r}
+set.seed(3570)
+trainPartition<-createDataPartition(y=trainingP2$classe, p=0.70, list=FALSE)
+trainingIn<-trainingP2[trainPartition,]
+testingIn<-trainingP2[-trainPartition,]
+```
+
+### Predictive model
+
+Build a Random Forest classification model for activity recognition prediction.
+
+- Random forests are an ensemble learning method that operate by constructing a multitude of decision trees at training time and outputting the class that is the mode of the classes (classification) or mean prediction (regression) of the individual trees. 
+- Random forests correct for decision trees' habit of overfitting to their training set, i.e. they are robust to correlated covariates and outliers.
+- 5-fold cross validation was used when applying the algorithm.
+- 30 trees was used for our final model. See the Appendix for a table and plot RF accuracies for a number of decision trees. Using larger numbers of trees increases risk of overfitting the data for obtaining only marginal increases in accuracy.
+
+```{r}
+mRF <- train(classe ~ ., data=trainingIn, method="rf", 
+                 trControl=trainControl(method="cv", 5), 
+                 ntree=30)
+mRF
+```
+
+### Performance evaluation 
+- Predict classification on *training* test set
+- Compute model *accuracy* and *out of sample error*
+```{r}
+# prediction classifications on test set
+predictRF <- predict(mRF, testingIn)
+confusionMatrix(testingIn$classe, predictRF)
+
+#compute model accuracy 
+accuracy <- postResample(predictRF, testingIn$classe)
+accuracy
+
+#compute out of sample error (oose)
+oose <- 1 - as.numeric(confusionMatrix(testingIn$classe, predictRF)$overall[1])
+oose
+```
+Prediction estimates:
+
+- Accuracy: $99.17$%
+- Out-of-sample error: $0.83$%.
+
+### Model prediction on validation data set
+- Estimate model performance on the validation set, i.e., the original test set.
+
+```{r}
+predictRF <- predict(mRF, testingP2[, -length(names(testingP2))] )
+predictRF
+
+# save predictions
+if (!file.exists("./answers")) {
+  dir.create("./answers")
+}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("./answers/problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(paste(predictRF))
+```
+
+### Appendix: Variable importance for Random Forest Model
+
+> Random Forest from the R package: "For each tree, the prediction accuracy on the out-of-bag portion of the data is recorded. Then the same is done after permuting each predictor variable. The difference between the two accuracies are then averaged over all trees, and normalized by the standard error. For regression, the MSE is computed on the out-of-bag data for each tree, and then the same computed after permuting a variable. The differences are averaged and normalized by the standard error. If the standard error is equal to 0 for a variable, the division is not done."
+Reference: [http://topepo.github.io/caret/varimp.html](http://topepo.github.io/caret/varimp.html)
+
+```{r}
+mRFImp <- varImp(mRF, scale = FALSE)
+mRFImp
+```
+
+### Appendix: Basic Decision Tree Dendogram
+
+Build a basic decision tree model to visualize decision parameters in a dendogram. In the basic decistion tree model, the order of selection is similar to the variable importance calculated for the Random Forest. The Random Forest uses a larger number of parameters and generates a larger number of finer granulatiry classification leafs.
+
+```{r}
+mDT <- rpart(classe ~ ., data=trainingIn, method="class")
+#plot(mDT)
+#text(mDT, use.n=TRUE)
+prp(mDT) 
+```
+
+### Appendix: Random Forest number decision trees evaluation
+```{r, echo=TRUE, warning=FALSE}
+accDF <- data.frame(nTrees= numeric(0), Accuracy= numeric(0))
+nList<-c(1,10,20,30,40,50)
+for( i in 1:length(nList) ) {
+  nTree<-nList[i]
+  #print(paste(i, nTree))
+  mRFx <- train(classe ~ ., data=trainingIn, method="rf", 
+                 trControl=trainControl(method="cv", 5), 
+                 ntree=nTree)
+  #mRFx
+  predictRF <- predict(mRFx, testingIn)
+  confusionMatrix(testingIn$classe, predictRF)
+  accuracy <- postResample(predictRF, testingIn$classe)
+  accDF[i, ] <- c(nTree, accuracy)
+}
+accDF
+plot(x=accDF$nTrees, y=accDF$Accuracy, type="l", main="RF Accuracy versus Number of Trees", xlab="nTrees", ylab="Accuracy", col="red", ylim=c(0.9,1.0))
+```
